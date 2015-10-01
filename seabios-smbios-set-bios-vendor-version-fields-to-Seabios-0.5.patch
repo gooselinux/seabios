@@ -1,0 +1,46 @@
+From 9c2676a9af0cecdeecde97695569337ff7ebd9c7 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Fri, 18 Jun 2010 16:11:39 -0300
+Subject: [PATCH 2/4] smbios: set bios vendor/version fields to Seabios/0.5.1
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1276877502-7483-5-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 9999
+O-Subject: [RHEL6 seabios PATCH 4/7] smbios: set bios vendor/version fields to
+	Seabios/0.5.1
+Bugzilla: 593317
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Gleb Natapov <gleb@redhat.com>
+RH-Acked-by: Jes Sorensen <Jes.Sorensen@redhat.com>
+
+Bugzilla: 593317
+Upstream status: not applicable
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ src/config.h |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ src/config.h |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/config.h b/src/config.h
+index 22b0f21..892015c 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -13,8 +13,8 @@
+ #define CONFIG_APPNAME4 "BXPC"
+ 
+ /* SMBIOS fields */
+-#define CONFIG_SMBIOS_VENDOR CONFIG_APPNAME
+-#define CONFIG_SMBIOS_VERSION CONFIG_APPNAME
++#define CONFIG_SMBIOS_VENDOR "Seabios"
++#define CONFIG_SMBIOS_VERSION "0.5.1"
+ #define CONFIG_SMBIOS_MANUFACTURER CONFIG_APPNAME
+ #define CONFIG_SMBIOS_PROD_NAME CONFIG_APPNAME
+ #define CONFIG_SMBIOS_TYPE3_NAME CONFIG_APPNAME
+-- 
+1.7.0.3
+
