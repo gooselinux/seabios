@@ -1,0 +1,336 @@
+From 970684f5389587f208b9bef86e3ad579445c02e0 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Fri, 18 Jun 2010 09:52:11 -0300
+Subject: [PATCH 2/2] Support USB interrupt schedules on OHCI and UHCI.
+
+RH-Author: Gerd Hoffmann <kraxel@redhat.com>
+Message-id: <1276854731-11957-2-git-send-email-kraxel@redhat.com>
+Patchwork-id: 9972
+O-Subject: [RHEL-6 seabios PATCH 2/2] Support USB interrupt schedules on OHCI
+	and UHCI.
+Bugzilla: 561324
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Jes Sorensen <Jes.Sorensen@redhat.com>
+RH-Acked-by: Gleb Natapov <gleb@redhat.com>
+
+From: Kevin O'Connor <kevin@koconnor.net>
+
+The existing code always checks for USB "interrupt in" events every
+millisecond.  Although that's okay, it consumes extra bandwidth.  This
+change interrupt checks to be scheduled according to their requested
+interval time.
+(cherry picked from commit 991eaff3f618d8018b2956b19bb47b0dff58a1d7)
+
+bugzilla: #561324
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ src/clock.c    |    2 -
+ src/usb-ohci.c |   39 ++++++++++++++++++++++++++++---------
+ src/usb-ohci.h |    2 +-
+ src/usb-uhci.c |   58 +++++++++++++++++++++++++++++++++++++------------------
+ src/usb-uhci.h |    2 +-
+ src/usb.c      |    8 +++++-
+ src/usb.h      |    2 +-
+ src/util.h     |    2 +
+ 8 files changed, 79 insertions(+), 36 deletions(-)
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ src/clock.c    |    2 -
+ src/usb-ohci.c |   39 ++++++++++++++++++++++++++++---------
+ src/usb-ohci.h |    2 +-
+ src/usb-uhci.c |   58 +++++++++++++++++++++++++++++++++++++------------------
+ src/usb-uhci.h |    2 +-
+ src/usb.c      |    8 +++++-
+ src/usb.h      |    2 +-
+ src/util.h     |    2 +
+ 8 files changed, 79 insertions(+), 36 deletions(-)
+
+diff --git a/src/clock.c b/src/clock.c
+index e32bf1b..5a30e35 100644
+--- a/src/clock.c
++++ b/src/clock.c
+@@ -54,8 +54,6 @@
+  * TSC timer
+  ****************************************************************/
+ 
+-#define PIT_TICK_RATE 1193180   // Underlying HZ of PIT
+-#define PIT_TICK_INTERVAL 65536 // Default interval for 18.2Hz timer
+ #define TICKS_PER_DAY (u32)((u64)60*60*24*PIT_TICK_RATE / PIT_TICK_INTERVAL)
+ #define CALIBRATE_COUNT 0x800   // Approx 1.7ms
+ 
+diff --git a/src/usb-ohci.c b/src/usb-ohci.c
+index 6ad1dbc..2d33fa9 100644
+--- a/src/usb-ohci.c
++++ b/src/usb-ohci.c
+@@ -149,12 +149,18 @@ ohci_init(void *data)
+ 
+     // Allocate memory
+     struct ohci_hcca *hcca = memalign_high(256, sizeof(*hcca));
++    struct ohci_ed *intr_ed = malloc_high(sizeof(*intr_ed));
+     struct ohci_ed *control_ed = malloc_high(sizeof(*control_ed));
+-    if (!hcca || !control_ed) {
++    if (!hcca || !intr_ed || !control_ed) {
+         dprintf(1, "No ram for ohci init\n");
+-        return;
++        goto free;
+     }
+     memset(hcca, 0, sizeof(*hcca));
++    memset(intr_ed, 0, sizeof(*intr_ed));
++    intr_ed->hwINFO = ED_SKIP;
++    int i;
++    for (i=0; i<ARRAY_SIZE(hcca->int_table); i++)
++        hcca->int_table[i] = (u32)intr_ed;
+     memset(control_ed, 0, sizeof(*control_ed));
+     control_ed->hwINFO = ED_SKIP;
+     cntl->ohci.control_ed = control_ed;
+@@ -170,7 +176,9 @@ ohci_init(void *data)
+ 
+ err:
+     stop_ohci(cntl);
++free:
+     free(hcca);
++    free(intr_ed);
+     free(control_ed);
+ }
+ 
+@@ -245,18 +253,21 @@ struct ohci_pipe {
+ };
+ 
+ struct usb_pipe *
+-ohci_alloc_intr_pipe(u32 endp, int period)
++ohci_alloc_intr_pipe(u32 endp, int frameexp)
+ {
+     if (! CONFIG_USB_OHCI)
+         return NULL;
+ 
+-    dprintf(7, "ohci_alloc_intr_pipe %x %d\n", endp, period);
++    dprintf(7, "ohci_alloc_intr_pipe %x %d\n", endp, frameexp);
++    if (frameexp > 5)
++        frameexp = 5;
+     struct usb_s *cntl = endp2cntl(endp);
+     int maxpacket = endp2maxsize(endp);
+     int lowspeed = endp2speed(endp);
+     int devaddr = endp2devaddr(endp) | (endp2ep(endp) << 7);
+-    // XXX - just grab 20 for now.
+-    int count = 20;
++    // Determine number of entries needed for 2 timer ticks.
++    int ms = 1<<frameexp;
++    int count = DIV_ROUND_UP(PIT_TICK_INTERVAL * 1000 * 2, PIT_TICK_RATE * ms);
+     struct ohci_pipe *pipe = malloc_low(sizeof(*pipe));
+     struct ohci_td *tds = malloc_low(sizeof(*tds) * count);
+     void *data = malloc_low(maxpacket * count);
+@@ -267,7 +278,6 @@ ohci_alloc_intr_pipe(u32 endp, int period)
+     ed->hwHeadP = (u32)&tds[0];
+     ed->hwTailP = (u32)&tds[count-1];
+     ed->hwINFO = devaddr | (maxpacket << 16) | (lowspeed ? ED_LOWSPEED : 0);
+-    ed->hwNextED = 0;
+ 
+     int i;
+     for (i=0; i<count-1; i++) {
+@@ -277,11 +287,20 @@ ohci_alloc_intr_pipe(u32 endp, int period)
+         tds[i].hwBE = tds[i].hwCBP + maxpacket - 1;
+     }
+ 
+-    // XXX - need schedule - just add to primary list for now.
++    // Add to interrupt schedule.
+     barrier();
+     struct ohci_hcca *hcca = (void*)cntl->ohci.regs->hcca;
+-    for (i=0; i<ARRAY_SIZE(hcca->int_table); i++)
+-        hcca->int_table[i] = (u32)ed;
++    if (frameexp == 0) {
++        // Add to existing interrupt entry.
++        struct ohci_ed *intr_ed = (void*)hcca->int_table[0];
++        ed->hwNextED = intr_ed->hwNextED;
++        intr_ed->hwNextED = (u32)ed;
++    } else {
++        int startpos = 1<<(frameexp-1);
++        ed->hwNextED = hcca->int_table[startpos];
++        for (i=startpos; i<ARRAY_SIZE(hcca->int_table); i+=ms)
++            hcca->int_table[i] = (u32)ed;
++    }
+ 
+     pipe->data = data;
+     pipe->count = count;
+diff --git a/src/usb-ohci.h b/src/usb-ohci.h
+index 5a4f735..7ff84f6 100644
+--- a/src/usb-ohci.h
++++ b/src/usb-ohci.h
+@@ -6,7 +6,7 @@ struct usb_s;
+ void ohci_init(void *data);
+ int ohci_control(u32 endp, int dir, const void *cmd, int cmdsize
+                  , void *data, int datasize);
+-struct usb_pipe *ohci_alloc_intr_pipe(u32 endp, int period);
++struct usb_pipe *ohci_alloc_intr_pipe(u32 endp, int frameexp);
+ int ohci_poll_intr(struct usb_pipe *pipe, void *data);
+ 
+ 
+diff --git a/src/usb-uhci.c b/src/usb-uhci.c
+index d98c08b..950ec6a 100644
+--- a/src/usb-uhci.c
++++ b/src/usb-uhci.c
+@@ -36,9 +36,15 @@ configure_uhci(struct usb_s *cntl)
+     // Allocate ram for schedule storage
+     struct uhci_td *term_td = malloc_high(sizeof(*term_td));
+     struct uhci_framelist *fl = memalign_high(sizeof(*fl), sizeof(*fl));
+-    struct uhci_qh *data_qh = malloc_low(sizeof(*data_qh));
++    struct uhci_qh *intr_qh = malloc_high(sizeof(*intr_qh));
++    struct uhci_qh *data_qh = malloc_high(sizeof(*data_qh));
+     struct uhci_qh *term_qh = malloc_high(sizeof(*term_qh));
+-    if (!term_td || !fl || !data_qh || !term_qh) {
++    if (!term_td || !fl || !intr_qh || !data_qh || !term_qh) {
++        free(term_td);
++        free(fl);
++        free(intr_qh);
++        free(data_qh);
++        free(term_qh);
+         dprintf(1, "No ram for uhci init\n");
+         return;
+     }
+@@ -58,11 +64,14 @@ configure_uhci(struct usb_s *cntl)
+     data_qh->link = (u32)term_qh | UHCI_PTR_QH;
+     cntl->uhci.qh = data_qh;
+ 
+-    // Set schedule to point to primary queue head
++    // Set schedule to point to primary intr queue head
++    memset(intr_qh, 0, sizeof(*intr_qh));
++    intr_qh->element = UHCI_PTR_TERM;
++    intr_qh->link = (u32)data_qh | UHCI_PTR_QH;
+     int i;
+-    for (i=0; i<ARRAY_SIZE(fl->links); i++) {
+-        fl->links[i] = (u32)data_qh | UHCI_PTR_QH;
+-    }
++    for (i=0; i<ARRAY_SIZE(fl->links); i++)
++        fl->links[i] = (u32)intr_qh | UHCI_PTR_QH;
++    cntl->uhci.framelist = fl;
+ 
+     // Set the frame length to the default: 1 ms exactly
+     outb(USBSOF_DEFAULT, cntl->uhci.iobase + USBSOF);
+@@ -229,26 +238,28 @@ uhci_control(u32 endp, int dir, const void *cmd, int cmdsize
+ }
+ 
+ struct usb_pipe *
+-uhci_alloc_intr_pipe(u32 endp, int period)
++uhci_alloc_intr_pipe(u32 endp, int frameexp)
+ {
+     if (! CONFIG_USB_UHCI)
+         return NULL;
+ 
+-    dprintf(7, "uhci_alloc_intr_pipe %x %d\n", endp, period);
++    dprintf(7, "uhci_alloc_intr_pipe %x %d\n", endp, frameexp);
++    if (frameexp > 10)
++        frameexp = 10;
+     struct usb_s *cntl = endp2cntl(endp);
+     int maxpacket = endp2maxsize(endp);
+     int lowspeed = endp2speed(endp);
+     int devaddr = endp2devaddr(endp) | (endp2ep(endp) << 7);
+-    // XXX - just grab 20 for now.
+-    int count = 20;
++    // Determine number of entries needed for 2 timer ticks.
++    int ms = 1<<frameexp;
++    int count = DIV_ROUND_UP(PIT_TICK_INTERVAL * 1000 * 2, PIT_TICK_RATE * ms);
+     struct uhci_qh *qh = malloc_low(sizeof(*qh));
+     struct uhci_td *tds = malloc_low(sizeof(*tds) * count);
+-    if (!qh || !tds)
+-        return NULL;
+-    if (maxpacket > sizeof(tds[0].data))
+-        // XXX - free qh/tds
++    if (!qh || !tds || maxpacket > sizeof(tds[0].data)) {
++        free(qh);
++        free(tds);
+         return NULL;
+-
++    }
+     qh->element = (u32)tds;
+     int toggle = 0;
+     int i;
+@@ -266,10 +277,19 @@ uhci_alloc_intr_pipe(u32 endp, int period)
+     qh->next_td = &tds[0];
+     qh->pipe.endp = endp;
+ 
+-    // XXX - need schedule - just add to primary list for now.
+-    struct uhci_qh *data_qh = cntl->uhci.qh;
+-    qh->link = data_qh->link;
+-    data_qh->link = (u32)qh | UHCI_PTR_QH;
++    // Add to interrupt schedule.
++    struct uhci_framelist *fl = cntl->uhci.framelist;
++    if (frameexp == 0) {
++        // Add to existing interrupt entry.
++        struct uhci_qh *intr_qh = (void*)(fl->links[0] & ~UHCI_PTR_BITS);
++        qh->link = intr_qh->link;
++        intr_qh->link = (u32)qh | UHCI_PTR_QH;
++    } else {
++        int startpos = 1<<(frameexp-1);
++        qh->link = fl->links[startpos];
++        for (i=startpos; i<ARRAY_SIZE(fl->links); i+=ms)
++            fl->links[i] = (u32)qh | UHCI_PTR_QH;
++    }
+ 
+     return &qh->pipe;
+ }
+diff --git a/src/usb-uhci.h b/src/usb-uhci.h
+index 5de7da0..03ac9cd 100644
+--- a/src/usb-uhci.h
++++ b/src/usb-uhci.h
+@@ -8,7 +8,7 @@ struct usb_s;
+ void uhci_init(void *data);
+ int uhci_control(u32 endp, int dir, const void *cmd, int cmdsize
+                  , void *data, int datasize);
+-struct usb_pipe *uhci_alloc_intr_pipe(u32 endp, int period);
++struct usb_pipe *uhci_alloc_intr_pipe(u32 endp, int frameexp);
+ int uhci_poll_intr(struct usb_pipe *pipe, void *data);
+ 
+ 
+diff --git a/src/usb.c b/src/usb.c
+index 12747db..5756ead 100644
+--- a/src/usb.c
++++ b/src/usb.c
+@@ -35,12 +35,16 @@ struct usb_pipe *
+ alloc_intr_pipe(u32 endp, int period)
+ {
+     struct usb_s *cntl = endp2cntl(endp);
++    // Find the exponential period of the requested time.
++    if (period <= 0)
++        period = 1;
++    int frameexp = __fls(period);
+     switch (cntl->type) {
+     default:
+     case USB_TYPE_UHCI:
+-        return uhci_alloc_intr_pipe(endp, period);
++        return uhci_alloc_intr_pipe(endp, frameexp);
+     case USB_TYPE_OHCI:
+-        return ohci_alloc_intr_pipe(endp, period);
++        return ohci_alloc_intr_pipe(endp, frameexp);
+     }
+ }
+ 
+diff --git a/src/usb.h b/src/usb.h
+index cc71c31..8b9c5f1 100644
+--- a/src/usb.h
++++ b/src/usb.h
+@@ -11,7 +11,7 @@ struct usb_s {
+     union {
+         struct {
+             u16 iobase;
+-            void *qh;
++            void *qh, *framelist;
+         } uhci;
+         struct {
+             struct ohci_regs *regs;
+diff --git a/src/util.h b/src/util.h
+index 60a7259..429590c 100644
+--- a/src/util.h
++++ b/src/util.h
+@@ -245,6 +245,8 @@ void serial_setup(void);
+ void lpt_setup(void);
+ 
+ // clock.c
++#define PIT_TICK_RATE 1193180   // Underlying HZ of PIT
++#define PIT_TICK_INTERVAL 65536 // Default interval for 18.2Hz timer
+ static inline int check_time(u64 end) {
+     return (s64)(rdtscll() - end) > 0;
+ }
+-- 
+1.7.0.3
+
