@@ -1,0 +1,44 @@
+From e8cf12d351eb19943379f63d89ad7a60f4c4145b Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Fri, 18 Jun 2010 16:11:41 -0300
+Subject: [PATCH 4/4] smbios: set Type 3 (chassis) manufacturer information to "Red Hat"
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <1276877502-7483-7-git-send-email-ehabkost@redhat.com>
+Patchwork-id: 10003
+O-Subject: [RHEL6 seabios PATCH 6/7] smbios: set Type 3 (chassis) manufacturer
+	information to "Red Hat"
+Bugzilla: 593317
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Gleb Natapov <gleb@redhat.com>
+RH-Acked-by: Jes Sorensen <Jes.Sorensen@redhat.com>
+
+Bugzilla: 593317
+Upstream status: not applicable
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ src/config.h |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ src/config.h |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/config.h b/src/config.h
+index f0afa1a..c15ae1d 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -17,7 +17,7 @@
+ #define CONFIG_SMBIOS_VERSION "0.5.1"
+ #define CONFIG_SMBIOS_MANUFACTURER "Red Hat"
+ #define CONFIG_SMBIOS_PROD_NAME "KVM"
+-#define CONFIG_SMBIOS_TYPE3_NAME CONFIG_APPNAME
++#define CONFIG_SMBIOS_TYPE3_NAME "Red Hat"
+ #define CONFIG_SMBIOS_CPU_NAME CONFIG_APPNAME
+ 
+ // Configure as a coreboot payload.
+-- 
+1.7.0.3
+
