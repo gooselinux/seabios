@@ -1,0 +1,108 @@
+Return-Path: rhvirt-patches-bounces@redhat.com
+Received: from mail.corp.redhat.com [10.5.5.51]
+	by mothafucka.localdomain with IMAP (fetchmail-6.3.11)
+	for <glauber@localhost> (single-drop); Mon, 08 Mar 2010 17:26:30 -0300 (BRT)
+Received: from zmta03.collab.prod.int.phx2.redhat.com (LHLO
+ zmta03.collab.prod.int.phx2.redhat.com) (10.5.5.33) by
+ mail03.corp.redhat.com with LMTP; Mon, 8 Mar 2010 15:22:51 -0500 (EST)
+Received: from localhost (localhost.localdomain [127.0.0.1])
+	by zmta03.collab.prod.int.phx2.redhat.com (Postfix) with ESMTP id 196044C601;
+	Mon,  8 Mar 2010 15:22:51 -0500 (EST)
+Received: from zmta03.collab.prod.int.phx2.redhat.com ([127.0.0.1])
+	by localhost (zmta03.collab.prod.int.phx2.redhat.com [127.0.0.1]) (amavisd-new, port 10024)
+	with ESMTP id ih9F7-VGgDKs; Mon,  8 Mar 2010 15:22:50 -0500 (EST)
+Received: from int-mx01.intmail.prod.int.phx2.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com [10.5.11.11])
+	by zmta03.collab.prod.int.phx2.redhat.com (Postfix) with ESMTP id C99584C5E4;
+	Mon,  8 Mar 2010 15:22:50 -0500 (EST)
+Received: from post-office.corp.redhat.com (post-office.corp.redhat.com [10.11.254.111])
+	by int-mx01.intmail.prod.int.phx2.redhat.com (8.13.8/8.13.8) with ESMTP id o28KMnOD031699
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO);
+	Mon, 8 Mar 2010 15:22:49 -0500
+Received: from post-office.corp.redhat.com (localhost.localdomain [127.0.0.1])
+	by post-office.corp.redhat.com (8.13.8/8.13.8) with ESMTP id o28KMmJX023020;
+	Mon, 8 Mar 2010 15:22:48 -0500
+Received: from int-mx01.intmail.prod.int.phx2.redhat.com
+	(int-mx01.intmail.prod.int.phx2.redhat.com [10.5.11.11])
+	by post-office.corp.redhat.com (8.13.8/8.13.8) with ESMTP id
+	o28KMkbt022920 for <rhvirt-patches@post-office.corp.redhat.com>;
+	Mon, 8 Mar 2010 15:22:46 -0500
+Received: from ns3.rdu.redhat.com (ns3.rdu.redhat.com [10.11.255.199])
+	by int-mx01.intmail.prod.int.phx2.redhat.com (8.13.8/8.13.8) with ESMTP
+	id o28KMea6031651; Mon, 8 Mar 2010 15:22:40 -0500
+Received: from amt.cnet (vpn-8-89.rdu.redhat.com [10.11.8.89])
+	by ns3.rdu.redhat.com (8.13.8/8.13.8) with ESMTP id o28KMdIb007322;
+	Mon, 8 Mar 2010 15:22:40 -0500
+Received: from amt.cnet (amt.cnet [127.0.0.1])
+	by amt.cnet (Postfix) with ESMTP id A560E68A1D3;
+	Mon,  8 Mar 2010 17:20:33 -0300 (BRT)
+Received: (from marcelo@localhost)
+	by amt.cnet (8.14.3/8.14.3/Submit) id o28KKWgh014394;
+	Mon, 8 Mar 2010 17:20:32 -0300
+Date: Mon, 8 Mar 2010 17:20:32 -0300
+From: Marcelo Tosatti <mtosatti@redhat.com>
+To: rhvirt-patches@redhat.com
+Subject: [RHEL6 seabios] Go back to using 0xf0000000 for PCI memory start
+Message-ID: <20100308202032.GA14376@amt.cnet>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.20 (2009-08-17)
+X-Scanned-By: MIMEDefang 2.67 on 10.5.11.11
+X-Scanned-By: MIMEDefang 2.67 on 10.5.11.11
+X-loop: rhvirt-patches@redhat.com
+Cc: "Justin M. Forbes" <jforbes@redhat.com>, Gerd Hoffmann <kraxel@redhat.com>,
+        Gleb Natapov <gleb@redhat.com>, "Michael S. Tsirkin" <mst@redhat.com>
+X-BeenThere: rhvirt-patches@post-office.corp.redhat.com
+X-Mailman-Version: 2.1.9
+Precedence: list
+List-Id: "Red Hat patches for virtualization \(kvm/xen/virtio-win\),
+	open for partners" <rhvirt-patches.post-office.corp.redhat.com>
+List-Unsubscribe: <http://post-office.corp.redhat.com/mailman/listinfo/rhvirt-patches>,
+	<mailto:rhvirt-patches-request@post-office.corp.redhat.com?subject=unsubscribe>
+List-Archive: <http://post-office.corp.redhat.com/archives/rhvirt-patches>
+List-Post: <mailto:rhvirt-patches@post-office.corp.redhat.com>
+List-Help: <mailto:rhvirt-patches-request@post-office.corp.redhat.com?subject=help>
+List-Subscribe: <http://post-office.corp.redhat.com/mailman/listinfo/rhvirt-patches>,
+	<mailto:rhvirt-patches-request@post-office.corp.redhat.com?subject=subscribe>
+Sender: rhvirt-patches-bounces@redhat.com
+Errors-To: rhvirt-patches-bounces@redhat.com
+Content-Length: 1064
+
+
+commit 6d75be2d038aa97a1ce52088c6f09d9829e5a39a
+Author: Kevin O'Connor <kevin@koconnor.net>
+Date:   Thu Jan 28 20:33:20 2010 -0500
+
+Go back to using 0xf0000000 for PCI memory start.
+
+Qemu/Kvm still has some dependencies on 0xe0000000, so go back until
+they are ready.
+
+BZ: 571553 
+
+diff --git a/src/config.h b/src/config.h
+index 58c0ffc..6297a48 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -143,6 +143,7 @@
+ // 32KB for shadow ram copying (works around emulator deficiencies)
+ #define BUILD_BIOS_TMP_ADDR       0x30000
+ #define BUILD_MAX_HIGHMEM         0xe0000000
++#define BUILD_PCIMEM_START        0xf0000000
+ 
+ #define BUILD_APIC_ADDR           0xfee00000
+ #define BUILD_IOAPIC_ADDR         0xfec00000
+diff --git a/src/pciinit.c b/src/pciinit.c
+index a6070e7..0556ee2 100644
+--- a/src/pciinit.c
++++ b/src/pciinit.c
+@@ -194,7 +194,7 @@ pci_setup(void)
+     dprintf(3, "pci setup\n");
+ 
+     pci_bios_io_addr = 0xc000;
+-    pci_bios_mem_addr = BUILD_MAX_HIGHMEM;
++    pci_bios_mem_addr = BUILD_PCIMEM_START;
+ 
+     int bdf, max;
+     foreachpci(bdf, max) {
+
