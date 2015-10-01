@@ -1,0 +1,57 @@
+From 36e549edb845ced36471e501ad1f0b8a08725e51 Mon Sep 17 00:00:00 2001
+From: Gleb Natapov <gleb@redhat.com>
+Date: Mon, 14 Jun 2010 10:02:19 -0300
+Subject: [PATCH] fix resume from S3 with QXL device
+
+RH-Author: Gleb Natapov <gleb@redhat.com>
+Message-id: <20100614100219.GD21797@redhat.com>
+Patchwork-id: 9882
+O-Subject: [PATCH SEABIOS RHEL6] fix resume from S3 with QXL device
+Bugzilla: 603677
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+RH-Acked-by: Jes Sorensen <Jes.Sorensen@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+QXL device is powered down during S3, so tell this to a guest OS
+in AML code.
+
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+--
+			Gleb.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ src/acpi-dsdt.dsl |   10 +++++++++-
+ 1 files changed, 9 insertions(+), 1 deletions(-)
+
+diff --git a/src/acpi-dsdt.dsl b/src/acpi-dsdt.dsl
+index cc31112..6e4502b 100644
+--- a/src/acpi-dsdt.dsl
++++ b/src/acpi-dsdt.dsl
+@@ -219,6 +219,10 @@ DefinitionBlock (
+     Scope(\_SB.PCI0) {
+         Device (VGA) {
+                  Name (_ADR, 0x00020000)
++                 OperationRegion(PCIC, PCI_Config, Zero, 0x4)
++                 Field(PCIC, DWordAcc, NoLock, Preserve) {
++                         VEND, 32
++                 } 
+                  Method (_S1D, 0, NotSerialized)
+                  {
+                          Return (0x00)
+@@ -229,7 +233,11 @@ DefinitionBlock (
+                  }
+                  Method (_S3D, 0, NotSerialized)
+                  {
+-                         Return (0x00)
++                         If (LEqual(VEND, 0x1001b36)) {
++                                 Return (0x03)           // QXL
++                         } Else {
++                                 Return (0x00)
++                         }
+                  }
+         }
+ 
+-- 
+1.7.0.3
+
