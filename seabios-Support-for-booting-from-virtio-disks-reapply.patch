@@ -1,0 +1,853 @@
+From 31cc91c0d83c06b2b7f757540daeb367c3002847 Mon Sep 17 00:00:00 2001
+From: Gleb Natapov <gleb@redhat.com>
+Date: Tue, 11 May 2010 12:46:28 -0300
+Subject: [PATCH 1/2] Support for booting from virtio disks
+
+RH-Author: Gleb Natapov <gleb@redhat.com>
+Message-id: <20100511124628.GM2504@redhat.com>
+Patchwork-id: 9180
+O-Subject: [PATCH RHEL6 SEABIOS BACKPORT] Support for booting from virtio disks
+Bugzilla: 578752
+RH-Acked-by: Jes Sorensen <Jes.Sorensen@redhat.com>
+RH-Acked-by: Christoph Hellwig <chellwig@redhat.com>
+RH-Acked-by: Gerd Hoffmann <kraxel@redhat.com>
+RH-Acked-by: Juan Quintela <quintela@redhat.com>
+
+This patch adds native support for booting from virtio disks to Seabios.
+
+BZ: 578752
+Upstream status: 89acfa3fb404bd81eac23bd5a3fb92d4eec50648
+
+Signed-off-by: Gleb Natapov <gleb@redhat.com>
+--
+			Gleb.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ Makefile          |    3 +-
+ src/block.c       |    6 ++
+ src/config.h      |    3 +
+ src/disk.h        |    1 +
+ src/pci_ids.h     |    3 +
+ src/post.c        |    2 +
+ src/virtio-blk.c  |  170 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/virtio-blk.h  |   44 ++++++++++++++
+ src/virtio-pci.c  |   69 +++++++++++++++++++++
+ src/virtio-pci.h  |  100 +++++++++++++++++++++++++++++++
+ src/virtio-ring.c |  154 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/virtio-ring.h |  129 ++++++++++++++++++++++++++++++++++++++++
+ 12 files changed, 683 insertions(+), 1 deletions(-)
+ create mode 100644 src/virtio-blk.c
+ create mode 100644 src/virtio-blk.h
+ create mode 100644 src/virtio-pci.c
+ create mode 100644 src/virtio-pci.h
+ create mode 100644 src/virtio-ring.c
+ create mode 100644 src/virtio-ring.h
+
+diff --git a/Makefile b/Makefile
+index c33647e..ccf41af 100644
+--- a/Makefile
++++ b/Makefile
+@@ -14,7 +14,8 @@ OUT=out/
+ SRCBOTH=misc.c pmm.c stacks.c output.c util.c block.c floppy.c ata.c mouse.c \
+         kbd.c pci.c serial.c clock.c pic.c cdrom.c ps2port.c smp.c resume.c \
+         pnpbios.c pirtable.c vgahooks.c ramdisk.c pcibios.c \
+-        usb.c usb-uhci.c usb-ohci.c usb-hid.c paravirt.c
++        usb.c usb-uhci.c usb-ohci.c usb-hid.c paravirt.c \
++        virtio-ring.c virtio-pci.c virtio-blk.c
+ SRC16=$(SRCBOTH) system.c disk.c apm.c font.c
+ SRC32FLAT=$(SRCBOTH) post.c shadow.c memmap.c coreboot.c boot.c \
+       acpi.c smm.c mptable.c smbios.c pciinit.c optionroms.c mtrr.c \
+diff --git a/src/block.c b/src/block.c
+index 01aa84a..0ef1c9a 100644
+--- a/src/block.c
++++ b/src/block.c
+@@ -10,6 +10,7 @@
+ #include "cmos.h" // inb_cmos
+ #include "util.h" // dprintf
+ #include "ata.h" // process_ata_op
++#include "virtio-blk.h" // process_virtio_op
+ 
+ struct drives_s Drives VAR16VISIBLE;
+ 
+@@ -297,6 +298,9 @@ describe_drive(struct drive_s *drive_g)
+     case DTYPE_RAMDISK:
+         describe_ramdisk(drive_g);
+         break;
++    case DTYPE_VIRTIO:
++        describe_virtio(drive_g);
++        break;
+     default:
+         printf("Unknown");
+         break;
+@@ -324,6 +328,8 @@ process_op(struct disk_op_s *op)
+         return process_ramdisk_op(op);
+     case DTYPE_CDEMU:
+         return process_cdemu_op(op);
++    case DTYPE_VIRTIO:
++        return  process_virtio_op(op);
+     default:
+         op->count = 0;
+         return DISK_RET_EPARAM;
+diff --git a/src/config.h b/src/config.h
+index afa0612..1f6a563 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -131,6 +131,9 @@
+ #define CONFIG_SUBMODEL_ID   0x00
+ #define CONFIG_BIOS_REVISION 0x01
+ 
++// Support boot from virtio storage
++#define CONFIG_VIRTIO_BLK 1
++
+ // Various memory addresses used by the code.
+ #define BUILD_STACK_ADDR          0x7000
+ #define BUILD_S3RESUME_STACK_ADDR 0x1000
+diff --git a/src/disk.h b/src/disk.h
+index ac5748e..749fedb 100644
+--- a/src/disk.h
++++ b/src/disk.h
+@@ -198,6 +198,7 @@ struct drive_s {
+ #define DTYPE_ATAPI    0x03
+ #define DTYPE_RAMDISK  0x04
+ #define DTYPE_CDEMU    0x05
++#define DTYPE_VIRTIO   0x07
+ 
+ #define TRANSLATION_NONE  0
+ #define TRANSLATION_LBA   1
+diff --git a/src/pci_ids.h b/src/pci_ids.h
+index 1800f1d..e1cded2 100644
+--- a/src/pci_ids.h
++++ b/src/pci_ids.h
+@@ -2605,3 +2605,6 @@
+ #define PCI_DEVICE_ID_RME_DIGI32	0x9896
+ #define PCI_DEVICE_ID_RME_DIGI32_PRO	0x9897
+ #define PCI_DEVICE_ID_RME_DIGI32_8	0x9898
++
++#define PCI_VENDOR_ID_REDHAT_QUMRANET	0x1af4
++#define PCI_DEVICE_ID_VIRTIO_BLK	0x1001
+diff --git a/src/post.c b/src/post.c
+index fb3b37f..ec9d21f 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -23,6 +23,7 @@
+ #include "smbios.h" // smbios_init
+ #include "paravirt.h" // qemu_cfg_port_probe
+ #include "ps2port.h" // ps2port_setup
++#include "virtio-blk.h" // virtio_blk_setup
+ 
+ void
+ __set_irq(int vector, void *loc)
+@@ -212,6 +213,7 @@ post(void)
+     floppy_setup();
+     ata_setup();
+     ramdisk_setup();
++    virtio_blk_setup();
+ 
+     // Run option roms
+     if (CONFIG_THREADS && CONFIG_THREAD_OPTIONROMS) {
+diff --git a/src/virtio-blk.c b/src/virtio-blk.c
+new file mode 100644
+index 0000000..14719c9
+--- /dev/null
++++ b/src/virtio-blk.c
+@@ -0,0 +1,170 @@
++// Virtio block boot support.
++//
++// Copyright (C) 2010 Red Hat Inc.
++//
++// Authors:
++//  Gleb Natapov <gnatapov@redhat.com>
++//
++// This file may be distributed under the terms of the GNU LGPLv3 license.
++
++#include "util.h" // dprintf
++#include "pci.h" // foreachpci
++#include "config.h" // CONFIG_*
++#include "biosvar.h" // GET_GLOBAL
++#include "pci_ids.h" // PCI_DEVICE_ID_VIRTIO_BLK
++#include "pci_regs.h" // PCI_VENDOR_ID
++#include "boot.h" // add_bcv_internal
++#include "virtio-pci.h"
++#include "virtio-ring.h"
++#include "virtio-blk.h"
++#include "disk.h"
++
++struct virtiodrive_s {
++    struct vring_virtqueue *vq;
++    u16 ioaddr;
++};
++
++static int
++virtio_blk_read(struct disk_op_s *op)
++{
++    struct drive_s *drive_g = op->drive_g;
++    struct virtiodrive_s *vdrive_g = (void*)GET_GLOBAL(drive_g->cntl_info);
++    struct vring_virtqueue *vq = GET_FLATPTR(vdrive_g->vq);
++    struct virtio_blk_outhdr hdr = {
++        .type = VIRTIO_BLK_T_IN,
++        .ioprio = 0,
++        .sector = op->lba,
++    };
++    u8 status = VIRTIO_BLK_S_UNSUPP;
++    struct vring_list sg[] = {
++        {
++            .addr	= MAKE_FLATPTR(GET_SEG(SS), &hdr),
++            .length	= sizeof(hdr),
++        },
++        {
++            .addr	= op->buf_fl,
++            .length	= GET_GLOBAL(drive_g->blksize) * op->count,
++        },
++        {
++            .addr	= MAKE_FLATPTR(GET_SEG(SS), &status),
++            .length	= sizeof(status),
++        },
++    };
++
++    /* Add to virtqueue and kick host */
++    vring_add_buf(vq, sg, 1, 2, 0, 0);
++    vring_kick(GET_FLATPTR(vdrive_g->ioaddr), vq, 1);
++
++    /* Wait for reply */
++    while (!vring_more_used(vq))
++        udelay(5);
++
++    /* Reclaim virtqueue element */
++    vring_get_buf(vq, NULL);
++    return status == VIRTIO_BLK_S_OK ? DISK_RET_SUCCESS : DISK_RET_EBADTRACK;
++}
++
++int
++process_virtio_op(struct disk_op_s *op)
++{
++    switch (op->command) {
++    case CMD_READ:
++        return virtio_blk_read(op);
++    case CMD_FORMAT:
++    case CMD_WRITE:
++        return DISK_RET_EWRITEPROTECT;
++    case CMD_RESET:
++    case CMD_ISREADY:
++    case CMD_VERIFY:
++    case CMD_SEEK:
++        return DISK_RET_SUCCESS;
++    default:
++        op->count = 0;
++        return DISK_RET_EPARAM;
++    }
++}
++
++void
++virtio_blk_setup(void)
++{
++    ASSERT32FLAT();
++    if (! CONFIG_VIRTIO_BLK)
++        return;
++
++    dprintf(3, "init virtio-blk\n");
++
++    int bdf, max;
++    u32 id = PCI_VENDOR_ID_REDHAT_QUMRANET | (PCI_DEVICE_ID_VIRTIO_BLK << 16);
++    foreachpci(bdf, max) {
++        u32 v = pci_config_readl(bdf, PCI_VENDOR_ID);
++        if (v != id)
++            continue;
++        dprintf(3, "found virtio-blk at %x:%x\n", pci_bdf_to_bus(bdf),
++                pci_bdf_to_dev(bdf));
++        struct virtiodrive_s *vdrive_g = malloc_fseg(sizeof(*vdrive_g));
++        struct vring_virtqueue *vq = malloc_low(sizeof(*vq));
++        if (!vdrive_g || !vq) {
++        fail:
++            free(vdrive_g);
++            free(vq);
++            dprintf(1, "Can't alloca memory for virtio-blk  %x:%x\n",
++                            pci_bdf_to_bus(bdf), pci_bdf_to_dev(bdf));
++            return;
++        }
++
++        u16 ioaddr = pci_config_readl(bdf, PCI_BASE_ADDRESS_0) &
++            PCI_BASE_ADDRESS_IO_MASK;
++
++        memset(vdrive_g, 0, sizeof(*vdrive_g));
++        vdrive_g->ioaddr = ioaddr;
++        vdrive_g->vq = vq;
++
++        vp_reset(ioaddr);
++        vp_set_status(ioaddr, VIRTIO_CONFIG_S_ACKNOWLEDGE |
++                      VIRTIO_CONFIG_S_DRIVER );
++
++        if (vp_find_vq(ioaddr, 0, vdrive_g->vq) < 0 ) {
++            free(vdrive_g);
++            free(vq);
++            dprintf(1, "fail to find vq for virtio-blk %x:%x\n",
++                    pci_bdf_to_bus (bdf), pci_bdf_to_dev(bdf));
++            continue;
++        }
++
++        struct drive_s *drive_g = allocDrive();
++        if (!drive_g)
++            goto fail;
++
++        drive_g->type = DTYPE_VIRTIO;
++        drive_g->cntl_id = bdf;
++        drive_g->cntl_info = (u32)vdrive_g;
++
++        struct virtio_blk_config cfg;
++        vp_get(ioaddr, 0, &cfg, sizeof(cfg));
++
++        u32 f = vp_get_features(ioaddr);
++        drive_g->blksize = (f & (1 << VIRTIO_BLK_F_BLK_SIZE)) ?
++            cfg.blk_size : DISK_SECTOR_SIZE;
++        drive_g->sectors = cfg.capacity;
++        dprintf(3, "virtio-blk %x:%x blksize=%d sectors=%u\n",
++                pci_bdf_to_bus (bdf), pci_bdf_to_dev(bdf),
++                drive_g->blksize, (u32)drive_g->sectors);
++
++        drive_g->pchs.cylinders = cfg.cylinders;
++        drive_g->pchs.heads = cfg.heads;
++        drive_g->pchs.spt = cfg.sectors;
++
++        setup_translation(drive_g);
++        add_bcv_internal(drive_g);
++
++        vp_set_status(ioaddr, VIRTIO_CONFIG_S_ACKNOWLEDGE |
++                      VIRTIO_CONFIG_S_DRIVER | VIRTIO_CONFIG_S_DRIVER_OK);
++    }
++}
++
++void
++describe_virtio(struct drive_s *drive_g)
++{
++    printf("Virtio disk PCI:%x:%x", pci_bdf_to_bus(drive_g->cntl_id),
++                                    pci_bdf_to_dev(drive_g->cntl_id));
++}
+diff --git a/src/virtio-blk.h b/src/virtio-blk.h
+new file mode 100644
+index 0000000..43a37d6
+--- /dev/null
++++ b/src/virtio-blk.h
+@@ -0,0 +1,44 @@
++#ifndef _VIRTIO_BLK_H
++#define _VIRTIO_BLK_H
++
++struct virtio_blk_config
++{
++    u64 capacity;
++    u32 size_max;
++    u32 seg_max;
++    u16 cylinders;
++    u8 heads;
++    u8 sectors;
++    u32 blk_size;
++    u8 physical_block_exp;
++    u8 alignment_offset;
++    u16 min_io_size;
++    u32 opt_io_size;
++} __attribute__((packed));
++
++#define VIRTIO_BLK_F_BLK_SIZE 6
++
++/* These two define direction. */
++#define VIRTIO_BLK_T_IN		0
++#define VIRTIO_BLK_T_OUT	1
++
++/* This is the first element of the read scatter-gather list. */
++struct virtio_blk_outhdr {
++    /* VIRTIO_BLK_T* */
++    u32 type;
++    /* io priority. */
++    u32 ioprio;
++    /* Sector (ie. 512 byte offset) */
++    u64 sector;
++};
++
++#define VIRTIO_BLK_S_OK		0
++#define VIRTIO_BLK_S_IOERR	1
++#define VIRTIO_BLK_S_UNSUPP	2
++
++struct disk_op_s;
++int process_virtio_op(struct disk_op_s *op);
++void virtio_blk_setup(void);
++void describe_virtio(struct drive_s *drive_g);
++
++#endif /* _VIRTIO_BLK_H */
+diff --git a/src/virtio-pci.c b/src/virtio-pci.c
+new file mode 100644
+index 0000000..db19e97
+--- /dev/null
++++ b/src/virtio-pci.c
+@@ -0,0 +1,69 @@
++/* virtio-pci.c - pci interface for virtio interface
++ *
++ * (c) Copyright 2008 Bull S.A.S.
++ *
++ *  Author: Laurent Vivier <Laurent.Vivier@bull.net>
++ *
++ * some parts from Linux Virtio PCI driver
++ *
++ *  Copyright IBM Corp. 2007
++ *  Authors: Anthony Liguori  <aliguori@us.ibm.com>
++ *
++ *  Adopted for Seabios: Gleb Natapov <gleb@redhat.com>
++ *
++ * This work is licensed under the terms of the GNU LGPLv3
++ * See the COPYING file in the top-level directory.
++ */
++
++#include "virtio-ring.h"
++#include "virtio-pci.h"
++#include "config.h" // CONFIG_DEBUG_LEVEL
++#include "util.h" // dprintf
++
++int vp_find_vq(unsigned int ioaddr, int queue_index,
++               struct vring_virtqueue *vq)
++{
++   struct vring * vr = &vq->vring;
++   u16 num;
++
++   ASSERT32FLAT();
++   /* select the queue */
++
++   outw(queue_index, ioaddr + VIRTIO_PCI_QUEUE_SEL);
++
++   /* check if the queue is available */
++
++   num = inw(ioaddr + VIRTIO_PCI_QUEUE_NUM);
++   if (!num) {
++       dprintf(1, "ERROR: queue size is 0\n");
++       return -1;
++   }
++
++   if (num > MAX_QUEUE_NUM) {
++       dprintf(1, "ERROR: queue size %d > %d\n", num, MAX_QUEUE_NUM);
++       return -1;
++   }
++
++   /* check if the queue is already active */
++
++   if (inl(ioaddr + VIRTIO_PCI_QUEUE_PFN)) {
++       dprintf(1, "ERROR: queue already active\n");
++       return -1;
++   }
++
++   vq->queue_index = queue_index;
++
++   /* initialize the queue */
++
++   vring_init(vr, num, (unsigned char*)&vq->queue);
++
++   /* activate the queue
++    *
++    * NOTE: vr->desc is initialized by vring_init()
++    */
++
++   outl((unsigned long)virt_to_phys(vr->desc) >> PAGE_SHIFT,
++        ioaddr + VIRTIO_PCI_QUEUE_PFN);
++
++   return num;
++}
+diff --git a/src/virtio-pci.h b/src/virtio-pci.h
+new file mode 100644
+index 0000000..9da761d
+--- /dev/null
++++ b/src/virtio-pci.h
+@@ -0,0 +1,100 @@
++#ifndef _VIRTIO_PCI_H
++#define _VIRTIO_PCI_H
++
++#include "ioport.h" // inl
++
++/* A 32-bit r/o bitmask of the features supported by the host */
++#define VIRTIO_PCI_HOST_FEATURES        0
++
++/* A 32-bit r/w bitmask of features activated by the guest */
++#define VIRTIO_PCI_GUEST_FEATURES       4
++
++/* A 32-bit r/w PFN for the currently selected queue */
++#define VIRTIO_PCI_QUEUE_PFN            8
++
++/* A 16-bit r/o queue size for the currently selected queue */
++#define VIRTIO_PCI_QUEUE_NUM            12
++
++/* A 16-bit r/w queue selector */
++#define VIRTIO_PCI_QUEUE_SEL            14
++
++/* A 16-bit r/w queue notifier */
++#define VIRTIO_PCI_QUEUE_NOTIFY         16
++
++/* An 8-bit device status register.  */
++#define VIRTIO_PCI_STATUS               18
++
++/* An 8-bit r/o interrupt status register.  Reading the value will return the
++ * current contents of the ISR and will also clear it.  This is effectively
++ * a read-and-acknowledge. */
++#define VIRTIO_PCI_ISR                  19
++
++/* The bit of the ISR which indicates a device configuration change. */
++#define VIRTIO_PCI_ISR_CONFIG           0x2
++
++/* The remaining space is defined by each driver as the per-driver
++ * configuration space */
++#define VIRTIO_PCI_CONFIG               20
++
++/* Virtio ABI version, this must match exactly */
++#define VIRTIO_PCI_ABI_VERSION          0
++
++static inline u32 vp_get_features(unsigned int ioaddr)
++{
++   return inl(ioaddr + VIRTIO_PCI_HOST_FEATURES);
++}
++
++static inline void vp_set_features(unsigned int ioaddr, u32 features)
++{
++        outl(features, ioaddr + VIRTIO_PCI_GUEST_FEATURES);
++}
++
++static inline void vp_get(unsigned int ioaddr, unsigned offset,
++                     void *buf, unsigned len)
++{
++   u8 *ptr = buf;
++   unsigned i;
++
++   for (i = 0; i < len; i++)
++           ptr[i] = inb(ioaddr + VIRTIO_PCI_CONFIG + offset + i);
++}
++
++static inline u8 vp_get_status(unsigned int ioaddr)
++{
++   return inb(ioaddr + VIRTIO_PCI_STATUS);
++}
++
++static inline void vp_set_status(unsigned int ioaddr, u8 status)
++{
++   if (status == 0)        /* reset */
++           return;
++   outb(status, ioaddr + VIRTIO_PCI_STATUS);
++}
++
++
++static inline void vp_reset(unsigned int ioaddr)
++{
++   outb(0, ioaddr + VIRTIO_PCI_STATUS);
++   (void)inb(ioaddr + VIRTIO_PCI_ISR);
++}
++
++static inline void vp_notify(unsigned int ioaddr, int queue_index)
++{
++   outw(queue_index, ioaddr + VIRTIO_PCI_QUEUE_NOTIFY);
++}
++
++static inline void vp_del_vq(unsigned int ioaddr, int queue_index)
++{
++   /* select the queue */
++
++   outw(queue_index, ioaddr + VIRTIO_PCI_QUEUE_SEL);
++
++   /* deactivate the queue */
++
++   outl(0, ioaddr + VIRTIO_PCI_QUEUE_PFN);
++}
++
++struct vring_virtqueue;
++int vp_find_vq(unsigned int ioaddr, int queue_index,
++               struct vring_virtqueue *vq);
++#endif /* _VIRTIO_PCI_H_ */
+diff --git a/src/virtio-ring.c b/src/virtio-ring.c
+new file mode 100644
+index 0000000..7565688
+--- /dev/null
++++ b/src/virtio-ring.c
+@@ -0,0 +1,154 @@
++/* virtio-pci.c - virtio ring management
++ *
++ * (c) Copyright 2008 Bull S.A.S.
++ *
++ *  Author: Laurent Vivier <Laurent.Vivier@bull.net>
++ *
++ *  some parts from Linux Virtio Ring
++ *
++ *  Copyright Rusty Russell IBM Corporation 2007
++ *
++ *  Adopted for Seabios: Gleb Natapov <gleb@redhat.com>
++ *
++ * This work is licensed under the terms of the GNU LGPLv3
++ * See the COPYING file in the top-level directory.
++ *
++ *
++ */
++
++#include "virtio-ring.h"
++#include "virtio-pci.h"
++#include "biosvar.h" // GET_GLOBAL
++#include "util.h" // dprintf
++
++#define BUG() do {                                      \
++        dprintf(1, "BUG: failure at %s:%d/%s()!\n",     \
++                __FILE__, __LINE__, __func__);          \
++                while(1);                               \
++        } while (0)
++#define BUG_ON(condition) do { if (condition) BUG(); } while (0)
++
++/*
++ * vring_more_used
++ *
++ * is there some used buffers ?
++ *
++ */
++
++int vring_more_used(struct vring_virtqueue *vq)
++{
++    struct vring_used *used = GET_FLATPTR(vq->vring.used);
++    wmb();
++    return GET_FLATPTR(vq->last_used_idx) != GET_FLATPTR(used->idx);
++}
++
++/*
++ * vring_free
++ *
++ * put at the begin of the free list the current desc[head]
++ */
++
++void vring_detach(struct vring_virtqueue *vq, unsigned int head)
++{
++    struct vring *vr = &vq->vring;
++    struct vring_desc *desc = GET_FLATPTR(vr->desc);
++    unsigned int i;
++
++    /* find end of given descriptor */
++
++    i = head;
++    while (GET_FLATPTR(desc[i].flags) & VRING_DESC_F_NEXT)
++        i = GET_FLATPTR(desc[i].next);
++
++    /* link it with free list and point to it */
++
++    SET_FLATPTR(desc[i].next, GET_FLATPTR(vq->free_head));
++    wmb();
++    SET_FLATPTR(vq->free_head, head);
++}
++
++/*
++ * vring_get_buf
++ *
++ * get a buffer from the used list
++ *
++ */
++
++int vring_get_buf(struct vring_virtqueue *vq, unsigned int *len)
++{
++    struct vring *vr = &vq->vring;
++    struct vring_used_elem *elem;
++    struct vring_used *used = GET_FLATPTR(vq->vring.used);
++    u32 id;
++    int ret;
++
++//    BUG_ON(!vring_more_used(vq));
++
++    elem = &used->ring[GET_FLATPTR(vq->last_used_idx) % GET_FLATPTR(vr->num)];
++    wmb();
++    id = GET_FLATPTR(elem->id);
++    if (len != NULL)
++        *len = GET_FLATPTR(elem->len);
++
++    ret = GET_FLATPTR(vq->vdata[id]);
++
++    vring_detach(vq, id);
++
++    SET_FLATPTR(vq->last_used_idx, GET_FLATPTR(vq->last_used_idx) + 1);
++
++    return ret;
++}
++
++void vring_add_buf(struct vring_virtqueue *vq,
++                   struct vring_list list[],
++                   unsigned int out, unsigned int in,
++                   int index, int num_added)
++{
++    struct vring *vr = &vq->vring;
++    int i, av, head, prev;
++    struct vring_desc *desc = GET_FLATPTR(vr->desc);
++    struct vring_avail *avail = GET_FLATPTR(vr->avail);
++
++    BUG_ON(out + in == 0);
++
++    prev = 0;
++    head = GET_FLATPTR(vq->free_head);
++    for (i = head; out; i = GET_FLATPTR(desc[i].next), out--) {
++        SET_FLATPTR(desc[i].flags, VRING_DESC_F_NEXT);
++        SET_FLATPTR(desc[i].addr, (u64)virt_to_phys(list->addr));
++        SET_FLATPTR(desc[i].len, list->length);
++        prev = i;
++        list++;
++    }
++    for ( ; in; i = GET_FLATPTR(desc[i].next), in--) {
++        SET_FLATPTR(desc[i].flags, VRING_DESC_F_NEXT|VRING_DESC_F_WRITE);
++        SET_FLATPTR(desc[i].addr, (u64)virt_to_phys(list->addr));
++        SET_FLATPTR(desc[i].len, list->length);
++        prev = i;
++        list++;
++    }
++    SET_FLATPTR(desc[prev].flags,
++                GET_FLATPTR(desc[prev].flags) & ~VRING_DESC_F_NEXT);
++
++    SET_FLATPTR(vq->free_head, i);
++
++    SET_FLATPTR(vq->vdata[head], index);
++
++    av = (GET_FLATPTR(avail->idx) + num_added) % GET_FLATPTR(vr->num);
++    SET_FLATPTR(avail->ring[av], head);
++    wmb();
++}
++
++void vring_kick(unsigned int ioaddr, struct vring_virtqueue *vq, int num_added)
++{
++    struct vring *vr = &vq->vring;
++    struct vring_avail *avail = GET_FLATPTR(vr->avail);
++    struct vring_used *used = GET_FLATPTR(vq->vring.used);
++
++    wmb();
++    SET_FLATPTR(avail->idx, GET_FLATPTR(avail->idx) + num_added);
++
++    mb();
++    if (!(GET_FLATPTR(used->flags) & VRING_USED_F_NO_NOTIFY))
++        vp_notify(ioaddr, GET_FLATPTR(vq->queue_index));
++}
+diff --git a/src/virtio-ring.h b/src/virtio-ring.h
+new file mode 100644
+index 0000000..939c946
+--- /dev/null
++++ b/src/virtio-ring.h
+@@ -0,0 +1,129 @@
++#ifndef _VIRTIO_RING_H
++#define _VIRTIO_RING_H
++
++#include "types.h" // u64
++#include "memmap.h" // PAGE_SIZE
++
++#define PAGE_SHIFT 12
++#define PAGE_MASK  (PAGE_SIZE-1)
++
++#define virt_to_phys(v) (unsigned long)(v)
++#define phys_to_virt(p) (void*)(p)
++#define wmb() barrier()
++#define mb() barrier()
++
++/* Status byte for guest to report progress, and synchronize features. */
++/* We have seen device and processed generic fields (VIRTIO_CONFIG_F_VIRTIO) */
++#define VIRTIO_CONFIG_S_ACKNOWLEDGE     1
++/* We have found a driver for the device. */
++#define VIRTIO_CONFIG_S_DRIVER          2
++/* Driver has used its parts of the config, and is happy */
++#define VIRTIO_CONFIG_S_DRIVER_OK       4
++/* We've given up on this device. */
++#define VIRTIO_CONFIG_S_FAILED          0x80
++
++#define MAX_QUEUE_NUM      (128)
++
++#define VRING_DESC_F_NEXT  1
++#define VRING_DESC_F_WRITE 2
++
++#define VRING_AVAIL_F_NO_INTERRUPT 1
++
++#define VRING_USED_F_NO_NOTIFY     1
++
++struct vring_desc
++{
++   u64 addr;
++   u32 len;
++   u16 flags;
++   u16 next;
++};
++
++struct vring_avail
++{
++   u16 flags;
++   u16 idx;
++   u16 ring[0];
++};
++
++struct vring_used_elem
++{
++   u32 id;
++   u32 len;
++};
++
++struct vring_used
++{
++   u16 flags;
++   u16 idx;
++   struct vring_used_elem ring[];
++};
++
++struct vring {
++   unsigned int num;
++   struct vring_desc *desc;
++   struct vring_avail *avail;
++   struct vring_used *used;
++};
++
++#define vring_size(num) \
++   (((((sizeof(struct vring_desc) * num) + \
++      (sizeof(struct vring_avail) + sizeof(u16) * num)) \
++         + PAGE_MASK) & ~PAGE_MASK) + \
++         (sizeof(struct vring_used) + sizeof(struct vring_used_elem) * num))
++
++typedef unsigned char virtio_queue_t[PAGE_MASK + vring_size(MAX_QUEUE_NUM)];
++
++struct vring_virtqueue {
++   virtio_queue_t queue;
++   struct vring vring;
++   u16 free_head;
++   u16 last_used_idx;
++   u16 vdata[MAX_QUEUE_NUM];
++   /* PCI */
++   int queue_index;
++};
++
++struct vring_list {
++  char *addr;
++  unsigned int length;
++};
++
++static inline void vring_init(struct vring *vr,
++                         unsigned int num, unsigned char *queue)
++{
++   unsigned int i;
++   unsigned long pa;
++
++   ASSERT32FLAT();
++   vr->num = num;
++
++   /* physical address of desc must be page aligned */
++
++   pa = virt_to_phys(queue);
++   pa = (pa + PAGE_MASK) & ~PAGE_MASK;
++   vr->desc = phys_to_virt(pa);
++
++   vr->avail = (struct vring_avail *)&vr->desc[num];
++   vr->avail->flags |= VRING_AVAIL_F_NO_INTERRUPT;
++
++   /* physical address of used must be page aligned */
++
++   pa = virt_to_phys(&vr->avail->ring[num]);
++   pa = (pa + PAGE_MASK) & ~PAGE_MASK;
++   vr->used = phys_to_virt(pa);
++
++   for (i = 0; i < num - 1; i++)
++           vr->desc[i].next = i + 1;
++   vr->desc[i].next = 0;
++}
++
++int vring_more_used(struct vring_virtqueue *vq);
++void vring_detach(struct vring_virtqueue *vq, unsigned int head);
++int vring_get_buf(struct vring_virtqueue *vq, unsigned int *len);
++void vring_add_buf(struct vring_virtqueue *vq, struct vring_list list[],
++                   unsigned int out, unsigned int in,
++                   int index, int num_added);
++void vring_kick(unsigned int ioaddr, struct vring_virtqueue *vq, int num_added);
++
++#endif /* _VIRTIO_RING_H_ */
+-- 
+1.7.0.3
+
