@@ -1,0 +1,44 @@
+From 49d9cc89bc5c0389bc32ea86f79ad4851e70e7f9 Mon Sep 17 00:00:00 2001
+From: Eduardo Habkost <ehabkost@redhat.com>
+Date: Mon, 21 Jun 2010 14:50:49 -0300
+Subject: [PATCH] Update version to 0.5.1
+
+RH-Author: Eduardo Habkost <ehabkost@redhat.com>
+Message-id: <20100621145049.GT14947@blackpad.lan.raisama.net>
+Patchwork-id: 10035
+O-Subject: [RHEL6 seabios PATCH] Update version to 0.5.1
+Bugzilla: 606411
+RH-Acked-by: Luiz Capitulino <lcapitulino@redhat.com>
+RH-Acked-by: Jes Sorensen <Jes.Sorensen@redhat.com>
+RH-Acked-by: Alex Williamson <alex.williamson@redhat.com>
+
+This is the only commit that is present on upstream SeaBIOS rel-0.5.1
+git tag and not present on the snapshot version we use as base on the
+RHEL6 package, so I will apply it so we can start tagging our package as
+0.5.1-{1,2,3}.el6 instead of git snapshots.
+
+---
+ Makefile |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ Makefile |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 73fcc89..5fb4c39 100644
+--- a/Makefile
++++ b/Makefile
+@@ -5,7 +5,7 @@
+ # This file may be distributed under the terms of the GNU LGPLv3 license.
+ 
+ # Program version
+-VERSION=pre-0.5.1-$(shell date +"%Y%m%d_%H%M%S")-$(shell hostname)
++VERSION=0.5.1-$(shell date +"%Y%m%d_%H%M%S")-$(shell hostname)
+ 
+ # Output directory
+ OUT=out/
+-- 
+1.7.0.3
+
